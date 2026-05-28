@@ -19,35 +19,6 @@ See [WINE_PORTING_NOTES.md](WINE_PORTING_NOTES.md) for a detailed writeup of eac
 
 ## Setup
 
-### Arch Linux
-
-#### 1. Install build dependencies
-
-```bash
-sudo pacman -S --needed \
-  base-devel git \
-  mingw-w64-gcc \
-  autoconf bison flex perl python \
-  lib32-glibc lib32-gcc-libs \
-  vulkan-headers \
-  fontconfig freetype2 gnutls libxcomposite libxcursor libxdamage \
-  libxext libxfixes libxi libxinerama libxrandr libxrender libxxf86vm \
-  mesa opencl-icd-loader openssl pcsclite sdl2 v4l-utils \
-  vulkan-icd-loader wayland gst-plugins-base-libs libcups libpcap libpulse
-```
-
-#### 2. Build and install the patched Wine
-
-```bash
-git clone https://github.com/ARacaniello/rhino8-wine
-cd rhino8-wine
-makepkg -si
-```
-
-Clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine is untouched.
-
----
-
 ### Ubuntu 24.04 LTS
 
 #### 1. Install build dependencies
@@ -103,6 +74,35 @@ mkdir wine-build && cd wine-build
 make -j$(nproc)
 sudo make install
 ```
+
+---
+
+### Arch Linux (untested)
+
+#### 1. Install build dependencies
+
+```bash
+sudo pacman -S --needed \
+  base-devel git \
+  mingw-w64-gcc \
+  autoconf bison flex perl python \
+  lib32-glibc lib32-gcc-libs \
+  vulkan-headers \
+  fontconfig freetype2 gnutls libxcomposite libxcursor libxdamage \
+  libxext libxfixes libxi libxinerama libxrandr libxrender libxxf86vm \
+  mesa opencl-icd-loader openssl pcsclite sdl2 v4l-utils \
+  vulkan-icd-loader wayland gst-plugins-base-libs libcups libpcap libpulse
+```
+
+#### 2. Build and install the patched Wine
+
+```bash
+git clone https://github.com/ARacaniello/rhino8-wine
+cd rhino8-wine
+makepkg -si
+```
+
+Clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine is untouched.
 
 ---
 
