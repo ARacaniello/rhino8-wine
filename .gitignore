@@ -19,3 +19,4 @@ tmp/
 
 # Screenshots (may contain personal info)
 Screenshot_*.png
+!desktop_screenshot.jpeg

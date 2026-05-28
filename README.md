@@ -4,6 +4,8 @@ Patches and instructions to run **Rhinoceros 8** on Linux under Wine 11.9.
 
 Tested on **Ubuntu 24.04.4 LTS (Noble Numbat)**, kernel 6.17, with Rhino **8.31.26126.13431**.
 
+![Rhino 8 running on Linux](desktop_screenshot.jpeg)
+
 Rhino 8 uses .NET 8 via Microsoft's CLR, which has requirements that Wine doesn't meet out of the box. Six distinct problems had to be solved to get it working:
 
 1. **.NET 8 requires ~512MB of reserved stack space** — Wine defaults to 1MB. Patched `ntdll` to force 512MB stacks on all threads.
