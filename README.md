@@ -1,0 +1,92 @@
+# rhino8-wine
+
+Patches and instructions to run **Rhinoceros 8** on Linux under Wine 11.9.
+
+Rhino 8 uses .NET 8 via Microsoft's CLR, which has requirements that Wine doesn't meet out of the box. Six distinct problems had to be solved to get it working:
+
+1. **.NET 8 requires ~512MB of reserved stack space** — Wine defaults to 1MB. Patched `ntdll` to force 512MB stacks on all threads.
+2. **.NET calibrates recursion depth from `VirtualQuery`** — with a 512MB stack it would try to use all of it and overflow. Patched `ntdll` to clamp the reported stack size to 1MB so .NET calibrates correctly.
+3. **Stack overflow exception frames couldn't be delivered** — with large stacks the guard page was too close to the stack bottom to fit an exception frame. Moved the guard page to +64KB.
+4. **Dark mode detection caused 254,955-deep mutual recursion** — `rhcommon_c.dll`'s `RHC_RhOSInDarkMode` and the managed `get_DarkMode()` called each other indefinitely on Wine. Fixed with a binary patch to make it always return light mode.
+5. **Wine can't verify Microsoft Authenticode signatures** — missing CA root store causes installer verification to fail. Patched `wintrust` to return success while still populating certificate state.
+6. **OAuth licensing callback (port 1717) never bound** — stale `http.sys` state from a previous run blocked the port. Fixed by killing the wineserver before launch.
+
+See [WINE_PORTING_NOTES.md](WINE_PORTING_NOTES.md) for a detailed writeup of each problem.
+
+---
+
+## Setup (Arch Linux)
+
+### 1. Install build dependencies
+
+```bash
+sudo pacman -S --needed \
+  base-devel git \
+  mingw-w64-gcc \
+  autoconf bison flex perl python \
+  lib32-glibc lib32-gcc-libs \
+  vulkan-headers \
+  fontconfig freetype2 gnutls libxcomposite libxcursor libxdamage \
+  libxext libxfixes libxi libxinerama libxrandr libxrender libxxf86vm \
+  mesa opencl-icd-loader openssl pcsclite sdl2 v4l-utils \
+  vulkan-icd-loader wayland gst-plugins-base-libs libcups libpcap libpulse
+```
+
+### 2. Build and install the patched Wine
+
+```bash
+git clone https://github.com/ARacaniello/rhino8-wine
+cd rhino8-wine
+makepkg -si
+```
+
+Clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine is untouched.
+
+### 3. Set up the wineprefix
+
+**Option A — Copy from another machine:**
+
+```bash
+rsync -av --progress user@sourcehost:~/.local/share/wineprefixes/rhino8/ \
+    ~/.local/share/wineprefixes/rhino8/
+```
+
+Then re-apply the `rhcommon_c.dll` patch (step 4).
+
+**Option B — Fresh Rhino install:**
+
+```bash
+export WINEPREFIX=~/.local/share/wineprefixes/rhino8
+export WINE=/opt/wine-rhino8/bin/wine
+
+WINEPREFIX=$WINEPREFIX WINEDEBUG=-all $WINE wineboot
+$WINE vc_redist.x64.exe /quiet
+$WINE RhinoInstaller.exe
+```
+
+### 4. Apply the rhcommon_c.dll binary patch
+
+Rhino ships `rhcommon_c.dll` — you already have it from the installer. Patch your local copy:
+
+```bash
+DLL="$HOME/.local/share/wineprefixes/rhino8/drive_c/Program Files/Rhino 8/System/rhcommon_c.dll"
+cp "$DLL" "$DLL.bak"
+printf '\x31\xc0\xc3\x90\x90\x90\x90' | \
+    dd of="$DLL" bs=1 seek=$((16#dff50)) conv=notrunc
+```
+
+This replaces the `RHC_RhOSInDarkMode` JMP thunk with `xor eax,eax; ret` (always returns light mode), preventing the mutual recursion crash.
+
+### 5. Run Rhino
+
+```bash
+./run-rhino.sh
+```
+
+If the licensing OAuth flow fails (Firefox redirects to `http://127.0.0.1:1717/` and gets "can't connect"), run:
+
+```bash
+./run-rhino.sh --fresh
+```
+
+This kills and restarts the wineserver, resetting the internal HTTP server state that handles the OAuth callback.
