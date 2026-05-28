@@ -2,6 +2,8 @@
 
 Patches and instructions to run **Rhinoceros 8** on Linux under Wine 11.9.
 
+Tested on **Ubuntu 24.04.4 LTS (Noble Numbat)**, kernel 6.17, with Rhino **8.31.26126.13431**.
+
 Rhino 8 uses .NET 8 via Microsoft's CLR, which has requirements that Wine doesn't meet out of the box. Six distinct problems had to be solved to get it working:
 
 1. **.NET 8 requires ~512MB of reserved stack space** — Wine defaults to 1MB. Patched `ntdll` to force 512MB stacks on all threads.
@@ -59,10 +61,15 @@ Then re-apply the `rhcommon_c.dll` patch (step 4).
 export WINEPREFIX=~/.local/share/wineprefixes/rhino8
 export WINE=/opt/wine-rhino8/bin/wine
 
+# Create the prefix
 WINEPREFIX=$WINEPREFIX WINEDEBUG=-all $WINE wineboot
-$WINE vc_redist.x64.exe /quiet
-$WINE RhinoInstaller.exe
+
+# Run the Rhino installer — it bundles and auto-installs all prerequisites
+# (VC2013, VC2015, WebView2, .NET 8 Desktop Runtime, ASP.NET Core Runtime)
+WINEPREFIX=$WINEPREFIX WINEDEBUG=-all $WINE RhinoInstaller.exe
 ```
+
+The `wintrust` patch (included in `rhino8-wine.patch`) is required for the installer to complete — Wine lacks the Microsoft CA root store needed to verify the installer's Authenticode signatures, and without the patch it fails during package verification.
 
 ### 4. Apply the rhcommon_c.dll binary patch
 
