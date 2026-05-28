@@ -1,0 +1,212 @@
+# Rhino 8 on Linux via Wine — Porting Notes
+
+Getting Rhinoceros 8 running on Linux under a patched Wine 11.9 build. Rhino heavily uses .NET 8 (via Microsoft's CLR) and many Windows-specific subsystems, making it a difficult target. This documents every problem hit and how it was fixed.
+
+---
+
+## Quick Start (Arch Linux)
+
+### 1. Install build dependencies
+
+```bash
+sudo pacman -S --needed \
+  base-devel git \
+  mingw-w64-gcc \
+  autoconf bison flex perl python \
+  lib32-glibc lib32-gcc-libs \
+  vulkan-headers \
+  fontconfig freetype2 gnutls libxcomposite libxcursor libxdamage \
+  libxext libxfixes libxi libxinerama libxrandr libxrender libxxf86vm \
+  mesa opencl-icd-loader openssl pcsclite sdl2 v4l-utils \
+  vulkan-icd-loader wayland gst-plugins-base-libs libcups libpcap libpulse
+```
+
+### 2. Build and install the patched Wine
+
+```bash
+git clone https://github.com/YOUR_USERNAME/rhino8-wine
+cd rhino8-wine
+makepkg -si
+```
+
+This clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine (if any) is untouched.
+
+### 3. Set up the wineprefix
+
+**Option A — Copy from another machine (fastest):**
+
+```bash
+# Run from your Arch host, pointing at the machine that already has Rhino installed:
+rsync -av --progress user@sourcehost:~/.local/share/wineprefixes/rhino8/ \
+    ~/.local/share/wineprefixes/rhino8/
+```
+
+Then re-apply the `rhcommon_c.dll` binary patch (see below) since the copy may have the unpatched version.
+
+**Option B — Fresh Rhino install:**
+
+```bash
+export WINEPREFIX=~/.local/share/wineprefixes/rhino8
+export WINE=/opt/wine-rhino8/bin/wine
+
+# Create the prefix
+WINEPREFIX=$WINEPREFIX WINEDEBUG=-all $WINE wineboot
+
+# Install Visual C++ runtimes (Rhino requires these)
+$WINE vc_redist.x64.exe /quiet
+
+# Install Rhino
+$WINE RhinoInstaller.exe
+```
+
+After installation, apply the `rhcommon_c.dll` patch (see below).
+
+### 4. Apply the rhcommon_c.dll binary patch
+
+This patch prevents a mutual recursion crash between Rhino's dark mode detection code and the .NET runtime. The DLL cannot be distributed here — apply it manually:
+
+```bash
+DLL="$HOME/.local/share/wineprefixes/rhino8/drive_c/Program Files/Rhino 8/System/rhcommon_c.dll"
+
+# Back up first
+cp "$DLL" "$DLL.bak"
+
+# Patch RHC_RhOSInDarkMode (file offset 0xdff50) to always return 0 (light mode)
+printf '\x31\xc0\xc3\x90\x90\x90\x90' | \
+    dd of="$DLL" bs=1 seek=$((16#dff50)) conv=notrunc
+```
+
+This replaces a JMP thunk with `xor eax,eax; ret` so the function always returns false (light mode), breaking the infinite recursion.
+
+To verify the patch was applied:
+```bash
+xxd "$DLL" | grep -A1 $(printf '%x\n' $((16#dff50 / 16)))
+# Should show: 31 c0 c3 90 90 90 90
+```
+
+### 5. Run Rhino
+
+```bash
+./run-rhino.sh
+```
+
+**If the licensing OAuth flow fails** (Firefox redirects to `http://127.0.0.1:1717/` and gets "can't connect"):
+
+```bash
+./run-rhino.sh --fresh
+```
+
+This kills and restarts the wineserver, which resets the internal HTTP server state that handles the OAuth callback.
+
+### Running alongside system Wine
+
+Since this build installs to `/opt/wine-rhino8`, it has no conflict with whatever Wine version your system has. The run script explicitly calls `/opt/wine-rhino8/bin/wine` — no PATH changes needed.
+
+---
+
+## What Was Changed and Why
+
+### Problem 1: Immediate Crash — Stack Overflow
+
+**Symptom:** Rhino crashed on startup before showing any UI. Wine logged a STATUS_STACK_OVERFLOW exception.
+
+**Root cause:** .NET 8's CLR calibrates its maximum safe recursion depth by querying the stack size via `VirtualQuery`. It reads `AllocationBase` from the stack's memory region to calculate available depth. Wine's default thread stacks are 1MB, but .NET 8 has a minimum requirement of ~512MB of *reserved* stack space to function at all.
+
+**Fix 1 — Force 512MB stack** (`dlls/ntdll/unix/thread.c` → `init_thread_stack`):
+
+Force every thread's stack to reserve and commit 512MB. This gives .NET enough room to start.
+
+```c
+if (reserve_size < 512 * 1024 * 1024) reserve_size = 512 * 1024 * 1024;
+if (commit_size < reserve_size) commit_size = reserve_size;
+```
+
+**Fix 2 — Clamp the reported stack size** (`dlls/ntdll/unix/virtual.c` → `fill_basic_memory_info`):
+
+Even with 512MB reserved, .NET saw the full 512MB via `VirtualQuery` and tried to use all of it for recursion depth calibration — then blew through the guard page. Clamp `AllocationBase` so `VirtualQuery` reports only 1MB of usable stack. .NET calibrates to 1MB depth while still having 512MB physically available.
+
+```c
+char *clamped = (char *)teb->Tib.StackBase - (1 * 1024 * 1024);
+if (clamped > (char *)teb->DeallocationStack &&
+    (char *)info->AllocationBase <= (char *)teb->DeallocationStack + host_page_size)
+    info->AllocationBase = clamped;
+```
+
+**Fix 3 — Move the guard page** (`dlls/ntdll/unix/virtual.c` → `virtual_alloc_thread_stack`):
+
+With 512MB stacks, the guard page was at `DeallocationStack + 4KB`. When a stack overflow exception fires, Windows needs to deliver an exception frame (3–8KB) in the "guaranteed region" below the guard. With only 4KB of guaranteed region, the exception frame itself caused a second fault, crashing Wine's signal handler. Move the guard page to `DeallocationStack + 64KB` for stacks ≥512MB.
+
+```c
+SIZE_T guard_offset = (view->size >= 512 * 1024 * 1024) ? 64 * 1024 : host_page_size;
+```
+
+---
+
+### Problem 2: Infinite Recursion Filling the 512MB Stack
+
+**Symptom:** Rhino still crashed, but now the crash was deep inside `pf_vsnprintf_a` (Wine's printf). The full 512MB stack was consumed. Examining the stack showed the same return address (`wine_dbg_log+0x21`) repeating every 264 bytes — a tight infinite loop.
+
+**Root cause:** A `WARN()` call inside `fill_basic_memory_info` (to log when the clamp was applied) caused infinite recursion. Wine's `WARN()` calls `wine_dbg_log()` → `wine_dbg_vprintf()` → `vsnprintf`, and somewhere in that chain a `VirtualQuery` call was made (from .NET's signal handlers or mono's glibc wrappers). This re-entered `fill_basic_memory_info`, which called `WARN()` again.
+
+**Fix:** Removed all `WARN()`/`ERR()` logging from `fill_basic_memory_info` and `init_thread_stack`. These functions are in the hot path called constantly by .NET — they cannot log anything.
+
+---
+
+### Problem 3: Dark Mode Mutual Recursion — 254,955 Frames Deep
+
+**Symptom:** Rhino crashed with a stack trace showing Rhino's own code: `Rhino.Runtime.AdvancedSettings.get_DarkMode()` (C#) calling P/Invoke to `RHC_RhOSInDarkMode` in `rhcommon_c.dll`, which called back into .NET managed code, which called `get_DarkMode()` again. 254,955 frames deep.
+
+**Root cause:** On Windows, `RHC_RhOSInDarkMode` detects the dark mode setting via Windows APIs that don't exist on Wine. Wine's stub returns something that caused the function to re-invoke the managed callback instead of returning a result.
+
+**Fix:** Binary-patched `rhcommon_c.dll`. The export `RHC_RhOSInDarkMode` at file offset `0xdff50` (RVA `0xe0b50`) was a JMP thunk:
+
+```
+before: 48 ff 25 19 8d 08 00 cc   (JMP [rip+...])
+after:  31 c0 c3 90 90 90 90 cc   (xor eax,eax; ret; nop*4)
+```
+
+Always returns 0 (light mode), breaking the recursion. Back up the DLL before patching.
+
+---
+
+### Problem 4: Diagnostic Kill Limits Cutting Rhino's Throat
+
+**Symptom:** Rhino showed a licensing dialog, but every licensing attempt returned "evaluation period expired."
+
+**Root cause (self-inflicted):** For debugging, kill-limit counters had been added to `dispatch_exception` and `call_seh_handlers`. Rhino's .NET runtime fires hundreds of internal CLR exceptions (`e0434352`) during normal startup — completely normal. Rhino was being killed after 100 exceptions before it ever finished initializing.
+
+**Fix:** Completely removed the diagnostic counters. Both functions were reverted to upstream.
+
+---
+
+### Problem 5: No X11 Display
+
+**Symptom:** Rhino exited silently with "no driver could be loaded."
+
+**Root cause:** The `DISPLAY` environment variable wasn't set.
+
+**Fix:** Added `DISPLAY="${DISPLAY:-:0}"` to the launch script.
+
+---
+
+### Problem 6: Licensing — Port 1717 Never Bound
+
+**Symptom:** The OAuth login flow opened Firefox. After logging in to McNeel's servers, Firefox redirected to `http://127.0.0.1:1717/` to deliver the auth token — and got "Firefox can't connect to the server."
+
+**Investigation:** Enabled `WINEDEBUG=+http` and confirmed Rhino was correctly calling `HttpAddUrlToUrlGroup` with `http://127.0.0.1:1717/`. Wine has a real implementation of the Windows HTTP Server API: `httpapi.dll` → `IOCTL_HTTP_ADD_URL` → `http.sys` kernel driver in `winedevice.exe`. Added instrumentation to Wine's `http_add_url` confirming the ioctl reached the driver and `bind()`/`listen()` was being attempted — but the socket never appeared.
+
+**Root cause:** Stale `http.sys` state. Between Rhino restarts, only Rhino was being killed while the wineserver (and the `winedevice.exe` running `http.sys`) stayed alive. The old `http.sys` retained state from the previous run that interfered with the new run's port binding.
+
+**Fix:** Kill the wineserver completely before launching (`wineserver -k`). This terminates the old `http.sys` winedevice. When Rhino launches fresh, a new `http.sys` starts with clean state, port 1717 binds, and the OAuth callback completes. The `--fresh` flag in `run-rhino.sh` does this automatically.
+
+---
+
+## Summary of Source Changes
+
+| File | Change |
+|------|--------|
+| `dlls/ntdll/unix/thread.c` | Force 512MB reserve+commit per thread; clamp TEB.StackLimit to StackBase−1MB |
+| `dlls/ntdll/unix/virtual.c` | Clamp VirtualQuery AllocationBase for stack queries (no logging); move guard page to +64KB for stacks ≥512MB |
+| `dlls/wintrust/wintrust_main.c` | Override Authenticode result to S_OK (Wine lacks MS CA root store needed to verify Microsoft signatures) |
+
+All changes are in `rhino8-wine.patch`.

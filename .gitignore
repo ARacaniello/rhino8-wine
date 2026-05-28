@@ -1,0 +1,21 @@
+# Wine source tree and build artifacts (huge, already on GitHub at wine-mirror/wine)
+wine/
+wine-build64/
+wine-inst/
+
+# Wineprefix — contains license credentials and 4+ GB of installed Windows software
+wineprefix/
+
+# Proprietary installers and redistributables
+*.exe
+redist/
+
+# Temp files and logs
+tmp/
+*.log
+
+# Claude session state
+.claude/
+
+# Screenshots (may contain personal info)
+Screenshot_*.png
