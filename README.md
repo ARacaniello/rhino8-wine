@@ -44,18 +44,7 @@ makepkg -si
 
 Clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine is untouched.
 
-### 3. Set up the wineprefix
-
-**Option A — Copy from another machine:**
-
-```bash
-rsync -av --progress user@sourcehost:~/.local/share/wineprefixes/rhino8/ \
-    ~/.local/share/wineprefixes/rhino8/
-```
-
-Then re-apply the `rhcommon_c.dll` patch (step 4).
-
-**Option B — Fresh Rhino install:**
+### 3. Install Rhino
 
 ```bash
 export WINEPREFIX=~/.local/share/wineprefixes/rhino8
