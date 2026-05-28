@@ -48,7 +48,7 @@ sudo apt install -y \
 Ubuntu doesn't have `makepkg` so build manually:
 
 ```bash
-git clone https://github.com/ARacaniello/rhino8-wine
+git clone https://github.com/ItHasLegs/rhino8-wine
 cd rhino8-wine
 
 # Clone Wine at the tested commit
@@ -97,7 +97,7 @@ sudo pacman -S --needed \
 #### 2. Build and install the patched Wine
 
 ```bash
-git clone https://github.com/ARacaniello/rhino8-wine
+git clone https://github.com/ItHasLegs/rhino8-wine
 cd rhino8-wine
 makepkg -si
 ```
