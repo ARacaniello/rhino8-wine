@@ -17,9 +17,11 @@ See [WINE_PORTING_NOTES.md](WINE_PORTING_NOTES.md) for a detailed writeup of eac
 
 ---
 
-## Setup (Arch Linux)
+## Setup
 
-### 1. Install build dependencies
+### Arch Linux
+
+#### 1. Install build dependencies
 
 ```bash
 sudo pacman -S --needed \
@@ -34,7 +36,7 @@ sudo pacman -S --needed \
   vulkan-icd-loader wayland gst-plugins-base-libs libcups libpcap libpulse
 ```
 
-### 2. Build and install the patched Wine
+#### 2. Build and install the patched Wine
 
 ```bash
 git clone https://github.com/ARacaniello/rhino8-wine
@@ -43,6 +45,66 @@ makepkg -si
 ```
 
 Clones Wine at the tested commit, applies the patches, builds (~20–40 min), and installs to `/opt/wine-rhino8`. Your system Wine is untouched.
+
+---
+
+### Ubuntu 24.04 LTS
+
+#### 1. Install build dependencies
+
+```bash
+sudo apt update
+sudo apt install -y \
+  build-essential git autoconf bison flex python3 pkg-config \
+  gcc-mingw-w64 \
+  libx11-dev libxext-dev libxrandr-dev libxcomposite-dev libxcursor-dev \
+  libxi-dev libxinerama-dev libxrender-dev libxxf86vm-dev \
+  libxfixes-dev libxdamage-dev \
+  libfreetype-dev libfontconfig-dev \
+  libgnutls28-dev \
+  libgl-dev \
+  libvulkan-dev vulkan-headers \
+  libwayland-dev \
+  libpulse-dev \
+  libcups2-dev libpcap-dev libsdl2-dev libv4l-dev \
+  ocl-icd-opencl-dev libpcsclite-dev unixodbc-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  libssl-dev
+```
+
+#### 2. Build and install the patched Wine
+
+Ubuntu doesn't have `makepkg` so build manually:
+
+```bash
+git clone https://github.com/ARacaniello/rhino8-wine
+cd rhino8-wine
+
+# Clone Wine at the tested commit
+git clone https://github.com/wine-mirror/wine.git wine-src
+cd wine-src
+git checkout 11c0254541e169e80495f4f48f7231af36ff8a0c
+cd ..
+
+# Apply the patch
+cd wine-src
+git apply ../rhino8-wine.patch
+cd ..
+
+# Configure and build
+mkdir wine-build && cd wine-build
+../wine-src/configure \
+  --prefix=/opt/wine-rhino8 \
+  --enable-archs=i386,x86_64 \
+  --with-x \
+  --with-wayland \
+  --with-vulkan \
+  --with-openssl
+make -j$(nproc)
+sudo make install
+```
+
+---
 
 ### 3. Install Rhino
 
